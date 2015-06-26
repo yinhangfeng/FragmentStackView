@@ -7,13 +7,14 @@ import android.graphics.drawable.Drawable;
 import android.support.annotation.DrawableRes;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
-import android.support.v4.widget.ScrollerCompat;
+import android.support.v4.app.FragmentTransaction;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
-import android.widget.OverScroller;
+import android.view.animation.Interpolator;
 import android.widget.Scroller;
 
 import java.util.ArrayList;
@@ -25,7 +26,14 @@ public class FragmentStackView extends ViewGroup {
     private static final String TAG = "FragmentStackView";
     static final boolean DEBUG = true;
 
-    private static final int DEFAULT_SCRIM_COLOR = 0x99000000;
+    private static final int DEFAULT_SCRIM_COLOR = 0x77000000;
+
+    private static final Interpolator sQuinticInterpolator = new Interpolator() {
+        public float getInterpolation(float t) {
+            t -= 1.0f;
+            return t * t * t * t * t + 1.0f;
+        }
+    };
 
     public static final int STATE_IDLE = 0;
     public static final int STATE_DRAGGING = 1;
@@ -39,7 +47,6 @@ public class FragmentStackView extends ViewGroup {
 
     //遮罩
     private int mScrimColor = DEFAULT_SCRIM_COLOR;
-    private float mScrimOpacity;
     private Paint mScrimPaint = new Paint();
 
     //阴影
@@ -50,6 +57,10 @@ public class FragmentStackView extends ViewGroup {
     /** 当前激活的下层View */
     private View behindActiveView;
     private float behindOffsetScale = 0.33f;
+
+    private ViewScroller mViewScroller = new ViewScroller();
+    //是否处于用户不可操作的动画中
+    private boolean forcedAnimation;
 
     private FragmentManager fragmentManager;
     private ArrayList<Fragment> fragmentStack = new ArrayList<>();
@@ -78,21 +89,42 @@ public class FragmentStackView extends ViewGroup {
      * @param animate 是否动画过程
      */
     public void push(Fragment fragment, String tag, boolean animate) {
+        if(forcedAnimation) {
+            Log.w(TAG, "push forcedAnimation");
+            return;
+        }
         fragmentStack.add(fragment);
         fragmentManager.beginTransaction()
                 .add(getId(), fragment, tag)
                 .commitAllowingStateLoss();
         fragmentManager.executePendingTransactions();
         if(animate) {
+            forcedAnimation = true;
             setTopActiveView();
             setActiveViewOffsetRatio(1);
+            smoothScroll(false, 0);
         } else {
             dispatchOnPush();
         }
     }
 
     public void pop(boolean animate) {
-
+        if(forcedAnimation) {
+            Log.w(TAG, "pop forcedAnimation");
+            return;
+        }
+        int size = fragmentStack.size();
+        if(size == 0) {
+            return;
+        }
+        if(animate) {
+            forcedAnimation = true;
+            setTopActiveView();
+            setActiveViewOffsetRatio(0);
+            smoothScroll(true, 0);
+        } else {
+            dispatchOnPop();
+        }
     }
 
     /**
@@ -114,26 +146,44 @@ public class FragmentStackView extends ViewGroup {
      * 处理push结束
      */
     private void dispatchOnPush() {
-        if(fragmentStack.size() > 1) {
-            fragmentManager.beginTransaction()
-                    .hide(fragmentStack.get(fragmentStack.size() - 2))
-                    .commitAllowingStateLoss();
-            fragmentManager.executePendingTransactions();
+        int size = fragmentStack.size();
+        if(size > 1) {
+            Fragment behindFragment = fragmentStack.get(size - 2);
+            if(behindFragment.isHidden()) {
+                behindActiveView.setVisibility(View.GONE);
+            } else {
+                fragmentManager.beginTransaction()
+                        .hide(behindFragment)
+                        .commitAllowingStateLoss();
+                fragmentManager.executePendingTransactions();
+            }
         }
+        resetActiveView();
+        forcedAnimation = false;
+        ensureTopViewOffset();
     }
 
     /**
      * 处理pop结束
      */
     private void dispatchOnPop() {
-
-    }
-
-    /**
-     * 处理上层View进入pop又复原
-     */
-    private void dispatchXXx() {
-
+        Log.i(TAG, "dispatchOnPop1 " + getChildCount());
+        int size = fragmentStack.size();
+        if(size > 0) {
+            Fragment fragment = fragmentStack.get(size - 1);
+            FragmentTransaction ft = fragmentManager.beginTransaction();
+            ft.remove(fragment);
+            if(size > 1) {
+                ft.show(fragmentStack.get(size - 2));
+            }
+            ft.commitAllowingStateLoss();
+            fragmentManager.executePendingTransactions();
+            fragmentStack.remove(size - 1);
+        }
+        Log.i(TAG, "dispatchOnPop2 " + getChildCount());
+        resetActiveView();
+        forcedAnimation = false;
+        ensureTopViewOffset();
     }
 
     /**
@@ -145,24 +195,36 @@ public class FragmentStackView extends ViewGroup {
         int childCount = getChildCount();
         if(childCount > 0) {
             aboveActiveView = getChildAt(childCount - 1);
-        } else if(childCount > 1) {
-            behindActiveView = getChildAt(childCount - 2);
+            if(childCount > 1) {
+                behindActiveView = getChildAt(childCount - 2);
+                if(behindActiveView.getVisibility() != View.VISIBLE) {
+                    behindActiveView.setVisibility(View.VISIBLE);
+                }
+            }
         }
     }
 
-    //强制设置当前的偏移比率,用于开始动画时的初始化
+    private void resetActiveView() {
+        aboveActiveView = null;
+        behindActiveView = null;
+    }
+
+    //设置当前的偏移比率
     private void setActiveViewOffsetRatio(float aboveOffsetRatio) {
+        if(aboveOffsetRatio < 0) {
+            aboveOffsetRatio = 0;
+        } else if(aboveOffsetRatio > 1) {
+            aboveOffsetRatio = 1;
+        }
         int newLeft = (int) (aboveOffsetRatio * getWidth());
         int dx = newLeft - aboveActiveView.getLeft();
         aboveActiveView.offsetLeftAndRight(dx);
         ((LayoutParams) aboveActiveView.getLayoutParams()).offsetRatio = aboveOffsetRatio;
         setBehindActiveViewOffset(aboveOffsetRatio);
+        invalidate();
     }
 
-    /**
-     * 偏移当前激活的View
-     * @param dx 相对于原位置的偏移值
-     */
+    //偏移当前激活的View
     private void offsetActiveView(int dx) {
         if(dx == 0) {
             return;
@@ -171,9 +233,10 @@ public class FragmentStackView extends ViewGroup {
         float aboveOffsetRatio = (float) aboveActiveView.getLeft() / getWidth();
         ((LayoutParams) aboveActiveView.getLayoutParams()).offsetRatio = aboveOffsetRatio;
         setBehindActiveViewOffset(aboveOffsetRatio);
+        invalidate();
     }
 
-    //设置behindActiveView的offset 与aboveActiveView相关
+    //设置behindActiveView的offset 与aboveActiveView联动
     private void setBehindActiveViewOffset(float aboveOffsetRatio) {
         if(behindActiveView != null) {
             float behindOffsetRatio = (aboveOffsetRatio - 1) * behindOffsetScale;
@@ -184,15 +247,48 @@ public class FragmentStackView extends ViewGroup {
     }
 
     /**
+     * 确保栈顶View的位置
+     */
+    private void ensureTopViewOffset() {
+        int childCount = getChildCount();
+        if(childCount == 0) {
+            return;
+        }
+        View topView = getChildAt(childCount - 1);
+        ((LayoutParams) topView.getLayoutParams()).offsetRatio = 0;
+        int left = topView.getLeft();
+        if(left != 0) {
+            topView.offsetLeftAndRight(-left);
+            invalidate();
+        }
+    }
+
+    /**
      * 平滑滚动当前激活的view
-     * @param open true 弹掉上层 false 恢复上层
+     * @param open true: pop上层, false: 恢复或push上层
      * @param velocity 初速度
      */
     private void smoothScroll(boolean open, int velocity) {
-        Scroller b;
-        OverScroller a;
-        ScrollerCompat c;
+        int startX = aboveActiveView.getLeft();
+        int endX = open ? getWidth() : 0;
+        // TODO: 2015/6/26 计算duration
+        int duration = 3000;
+        mViewScroller.startScroll(startX, endX - startX, duration);
+    }
 
+    private void setDragState(int state) {
+        if(mDragState == state) {
+            return;
+        }
+        mDragState = state;
+        if(state == STATE_IDLE && aboveActiveView != null) {
+            LayoutParams lp = (LayoutParams) aboveActiveView.getLayoutParams();
+            if(lp.offsetRatio == 1) {
+                dispatchOnPop();
+            } else if(lp.offsetRatio == 0) {
+                dispatchOnPush();
+            }
+        }
     }
 
     @Override
@@ -264,21 +360,35 @@ public class FragmentStackView extends ViewGroup {
     @Override
     protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
         final boolean result = super.drawChild(canvas, child, drawingTime);
-        if (mScrimOpacity > 0 && child == behindActiveView) {
-            //在behindActiveView的上面盖上遮罩
-            final int baseAlpha = (mScrimColor & 0xff000000) >>> 24;
-            final int imag = (int) (baseAlpha * mScrimOpacity);
-            final int color = imag << 24 | (mScrimColor & 0xffffff);
-            mScrimPaint.setColor(color);
-            canvas.drawRect(0, 0, getWidth(), getHeight(), mScrimPaint);
-        }
-        if(mShadow != null && child == aboveActiveView) {
-            //在aboveActiveView边缘画上阴影
-            int childLeft = child.getLeft();
-            mShadow.setBounds(childLeft - mShadow.getIntrinsicWidth(), child.getTop(), childLeft, child.getBottom());
-            mShadow.draw(canvas);
+        if(aboveActiveView != null) {
+            float opacity = 1 - ((LayoutParams) aboveActiveView.getLayoutParams()).offsetRatio;
+            if(opacity > 0) {
+                if (child == behindActiveView) {
+                    //在behindActiveView的上面盖上遮罩
+                    final int baseAlpha = (mScrimColor & 0xff000000) >>> 24;
+                    final int imag = (int) (baseAlpha * opacity);
+                    final int color = imag << 24 | (mScrimColor & 0xffffff);
+                    mScrimPaint.setColor(color);
+                    canvas.drawRect(0, 0, getWidth(), getHeight(), mScrimPaint);
+                }
+                if(mShadow != null && child == aboveActiveView) {
+                    //在aboveActiveView边缘画上阴影
+                    int childLeft = child.getLeft();
+                    mShadow.setBounds(childLeft - mShadow.getIntrinsicWidth(), child.getTop(), childLeft, child.getBottom());
+                    mShadow.setAlpha((int) (0xff * opacity));
+                    mShadow.draw(canvas);
+                }
+            }
         }
         return result;
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if(forcedAnimation) {
+            return false;
+        }
+        return super.dispatchTouchEvent(ev);
     }
 
     @Override
@@ -296,7 +406,7 @@ public class FragmentStackView extends ViewGroup {
     @Override
     public void addView(View child, int index, ViewGroup.LayoutParams params) {
         if(checkLayoutParams(params)) {
-            ((LayoutParams) params).offsetRatio = 1;
+            ((LayoutParams) params).offsetRatio = 0;
         }
         super.addView(child, index, params);
     }
@@ -337,7 +447,7 @@ public class FragmentStackView extends ViewGroup {
          * 0:一般状态
          * 1:右侧不可见
          */
-        float offsetRatio = 1;
+        float offsetRatio;
 
         public LayoutParams(Context c, AttributeSet attrs) {
             super(c, attrs);
@@ -353,6 +463,43 @@ public class FragmentStackView extends ViewGroup {
 
         public LayoutParams(ViewGroup.LayoutParams source) {
             super(source);
+        }
+    }
+
+    private class ViewScroller implements Runnable {
+
+        private Scroller mScroller;
+        private int lastX;
+
+        public ViewScroller() {
+            mScroller = new Scroller(getContext(), sQuinticInterpolator);
+        }
+
+        @Override
+        public void run() {
+            if(mScroller.computeScrollOffset()) {
+                int x = mScroller.getCurrX();
+                int dx = x - lastX;
+                lastX = x;
+                offsetActiveView(dx);
+            }
+            if(mScroller.isFinished()) {
+                setDragState(STATE_IDLE);
+            } else {
+                postOnAnimation(this);
+            }
+        }
+
+        public void startScroll(int startX, int dx, int duration) {
+            setDragState(STATE_SETTLING);
+            lastX = startX;
+            mScroller.startScroll(startX, 0, dx, 0, duration);
+            postOnAnimation(this);
+        }
+
+        public void stop() {
+            removeCallbacks(this);
+            mScroller.abortAnimation();
         }
     }
 }
