@@ -8,9 +8,12 @@ import android.support.annotation.DrawableRes;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
 import android.support.v4.app.FragmentTransaction;
+import android.support.v4.view.MotionEventCompat;
+import android.support.v4.view.VelocityTrackerCompat;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
@@ -39,11 +42,20 @@ public class FragmentStackView extends ViewGroup {
     public static final int STATE_DRAGGING = 1;
     public static final int STATE_SETTLING = 2;
 
-    private int mDragState;
-
-    private final int mTouchSlop;
+    private int mDragState = STATE_IDLE;
     private final int mMaxVelocity;
     private final int mMinVelocity;
+    private VelocityTracker mVelocityTracker;
+    private final int mTouchSlop;
+    private float mInitialMotionX;
+    private float mInitialMotionY;
+    private float mLastMotionX;
+    private float mLastMotionY;
+    private boolean mIsUnableToDrag;
+    private int mTouchMarginSize;
+
+    private static final int INVALID_POINTER = -1;
+    private int mActivePointerId = INVALID_POINTER;
 
     //遮罩
     private int mScrimColor = DEFAULT_SCRIM_COLOR;
@@ -79,6 +91,9 @@ public class FragmentStackView extends ViewGroup {
         mTouchSlop = vc.getScaledTouchSlop();
         mMaxVelocity = vc.getScaledMaximumFlingVelocity();
         mMinVelocity = vc.getScaledMinimumFlingVelocity();
+        final float density = getResources().getDisplayMetrics().density;
+        mTouchMarginSize = (int) (16 * density);//16dp
+
         setWillNotDraw(true);
     }
 
@@ -392,15 +407,68 @@ public class FragmentStackView extends ViewGroup {
     }
 
     @Override
-    public boolean onInterceptHoverEvent(MotionEvent event) {
-        return super.onInterceptHoverEvent(event);
-        // TODO: 2015/6/25
+    public boolean onInterceptTouchEvent(MotionEvent ev) {
+
+        final int action = MotionEventCompat.getActionMasked(ev);
+
+        if(action != MotionEvent.ACTION_DOWN && mIsUnableToDrag) {
+            return false;
+        }
+
+        switch(action) {
+        case MotionEvent.ACTION_DOWN:
+            float initialMotionX = ev.getX();
+            if(isInMargin(initialMotionX)) {
+                mLastMotionX = mInitialMotionX = initialMotionX;
+                mLastMotionY = mInitialMotionY = ev.getY();
+                mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
+                mIsUnableToDrag = false;
+            } else {
+                mIsUnableToDrag = true;
+            }
+            break;
+        case MotionEvent.ACTION_MOVE:
+            final int pointerIndex = MotionEventCompat.findPointerIndex(ev, mActivePointerId);
+            final float x = MotionEventCompat.getX(ev, pointerIndex);
+            final float dx = x - mInitialMotionX;
+
+
+            break;
+        case MotionEvent.ACTION_UP:
+            break;
+        case MotionEvent.ACTION_CANCEL:
+            break;
+        case MotionEventCompat.ACTION_POINTER_DOWN:
+            break;
+        case MotionEventCompat.ACTION_POINTER_UP:
+            break;
+        }
+
+        return super.onInterceptTouchEvent(ev);
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         return super.onTouchEvent(event);
         // TODO: 2015/6/25
+    }
+
+    //切换mActivePointerId
+    private void onSecondaryPointerUp(MotionEvent ev) {
+        final int pointerIndex = MotionEventCompat.getActionIndex(ev);
+        if (MotionEventCompat.getPointerId(ev, pointerIndex) == mActivePointerId) {
+            final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
+            mLastMotionX = MotionEventCompat.getX(ev, newPointerIndex);
+            mActivePointerId = MotionEventCompat.getPointerId(ev, newPointerIndex);
+            if (mVelocityTracker != null) {
+                mVelocityTracker.clear();
+            }
+        }
+    }
+
+    //x坐标是否处于边界
+    private boolean isInMargin(float motionX) {
+        return motionX < mTouchMarginSize;
     }
 
     @Override
