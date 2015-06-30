@@ -79,6 +79,8 @@ public class FragmentStackView extends ViewGroup {
 
     private FragmentManager fragmentManager;
     private ArrayList<Fragment> fragmentStack = new ArrayList<>();
+    //当前behindView在栈中的index 默认-1为栈顶的下一个
+    private int behindViewIndex = -1;
 
     public FragmentStackView(Context context) {
         this(context, null);
@@ -157,6 +159,43 @@ public class FragmentStackView extends ViewGroup {
         }
     }
 
+    public void popByIndex(int index, boolean include, boolean animate) {
+        if(isInAnimation()) {
+            Log.w(TAG, "push isInAnimation");
+            return;
+        }
+        if(index < 0 || index >= fragmentStack.size()) {
+            Log.e(TAG, "popByIndex invalid index");
+            return;
+        }
+        behindViewIndex = include ? index - 1 : index;
+        if(animate) {
+            forcedAnimation = true;
+            setupTopActiveView();
+            setActiveViewOffsetRatio(0);
+            smoothScroll(true, 0);
+        } else {
+            dispatchOnPop();
+        }
+    }
+
+    /**
+     * 获取tag对应的fragment在栈中的index
+     * @param tag fragment的tag
+     * @return index -1不存在
+     */
+    public int getIndexByTag(String tag) {
+        if(tag == null) {
+            return -1;
+        }
+        for(int i = 0, len = fragmentStack.size(); i < len; ++i) {
+            if(tag.equals(fragmentStack.get(i).getTag())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     public boolean isInAnimation() {
         // TODO: 2015/6/30
         return forcedAnimation || mDragState != STATE_IDLE;
@@ -209,19 +248,29 @@ public class FragmentStackView extends ViewGroup {
         //Log.i(TAG, "dispatchOnPop1 " + getChildCount());
         int size = fragmentStack.size();
         if(size > 0) {
-            Fragment fragment = fragmentStack.get(size - 1);
-            try {
-                FragmentTransaction ft = fragmentManager.beginTransaction();
-                ft.remove(fragment);
+            int endIndex = behindViewIndex;
+            if(endIndex < 0) {
                 if(size > 1) {
-                    ft.show(fragmentStack.get(size - 2));
+                    endIndex = size - 1;
+                } else {
+                    endIndex = -1;
+                }
+            } else if(endIndex >= size - 1) {
+                throw new IllegalStateException("behindViewIndex >= size - 1");
+            }
+            FragmentTransaction ft = fragmentManager.beginTransaction();
+            try {
+                for(int i = size - 1; i > endIndex; --i) {
+                    ft.remove(fragmentStack.remove(i));
+                }
+                if(endIndex >= 0) {
+                    ft.show(fragmentStack.get(endIndex));
                 }
                 ft.commitAllowingStateLoss();
                 fragmentManager.executePendingTransactions();
             } catch(Exception ig) {
                 Log.e(TAG, "dispatchOnPop", ig);
             }
-            fragmentStack.remove(size - 1);
         }
         //Log.i(TAG, "dispatchOnPop2 " + getChildCount());
         resetActiveView();
@@ -239,7 +288,14 @@ public class FragmentStackView extends ViewGroup {
         if(childCount > 0) {
             aboveActiveView = getChildAt(childCount - 1);
             if(childCount > 1) {
-                behindActiveView = getChildAt(childCount - 2);
+                if(behindViewIndex < 0) {
+                    behindActiveView = getChildAt(childCount - 2);
+                } else {
+                    if(behindViewIndex >= childCount - 1) {
+                        throw new IllegalStateException("behindViewIndex >= childCount - 1");
+                    }
+                    behindActiveView = getChildAt(behindViewIndex);
+                }
                 if(behindActiveView.getVisibility() != View.VISIBLE) {
                     behindActiveView.setVisibility(View.VISIBLE);
                 }
@@ -257,6 +313,7 @@ public class FragmentStackView extends ViewGroup {
     private void resetActiveView() {
         aboveActiveView = null;
         behindActiveView = null;
+        behindViewIndex = -1;
     }
 
     //设置当前的偏移比率
@@ -332,8 +389,9 @@ public class FragmentStackView extends ViewGroup {
             float distance = halfWidth + halfWidth * f;
             duration = 6 * Math.round(1000 * Math.abs(distance / velocity));
         } else {
-            duration = (int) ((distanceRatio + 1) * 150);
+            duration = (int) ((distanceRatio + 1) * 200);
         }
+        if(DEBUG) Log.i(TAG, "duration=" + duration);
         duration = Math.min(duration, MAX_SETTLE_DURATION);
         mViewScroller.startScroll(startX, endX - startX, duration);
     }
@@ -759,5 +817,9 @@ public class FragmentStackView extends ViewGroup {
             removeCallbacks(this);
             mScroller.abortAnimation();
         }
+    }
+
+    public void debug() {
+        Log.i(TAG, "fragmentStack:" + fragmentStack);
     }
 }

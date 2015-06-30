@@ -19,7 +19,7 @@ public class MainActivity extends AppCompatActivity {
 
         fragmentStackView = (FragmentStackView) findViewById(R.id.fragment_stack_view);
         fragmentStackView.setFragmentManager(getSupportFragmentManager());
-        fragmentStackView.setShadow(R.drawable.drawer_shadow);
+        fragmentStackView.setShadow(R.drawable.left_edge_shadow);
     }
 
     @Override
@@ -81,20 +81,22 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void test5() {
+        fragmentStackView.popByIndex(0, false, true);
     }
 
     private void test6() {
-
+        fragmentStackView.popByIndex(0, false, false);
     }
 
     private void test7() {
-
+        fragmentStackView.popByIndex(0, true, true);
     }
 
     private void test8() {
-
+        fragmentStackView.popByIndex(1, true, true);
     }
 
     private void test9() {
+        fragmentStackView.debug();
     }
 }
