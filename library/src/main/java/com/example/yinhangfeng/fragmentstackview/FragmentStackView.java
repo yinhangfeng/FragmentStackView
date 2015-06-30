@@ -8,6 +8,7 @@ import android.support.annotation.DrawableRes;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
 import android.support.v4.app.FragmentTransaction;
+import android.support.v4.content.res.ResourcesCompat;
 import android.support.v4.view.MotionEventCompat;
 import android.support.v4.view.VelocityTrackerCompat;
 import android.util.AttributeSet;
@@ -17,6 +18,7 @@ import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.animation.Interpolator;
 import android.widget.Scroller;
 
@@ -38,6 +40,8 @@ public class FragmentStackView extends ViewGroup {
         }
     };
 
+    private static final int MAX_SETTLE_DURATION = 600;
+
     public static final int STATE_IDLE = 0;
     public static final int STATE_DRAGGING = 1;
     public static final int STATE_SETTLING = 2;
@@ -50,7 +54,6 @@ public class FragmentStackView extends ViewGroup {
     private float mInitialMotionX;
     private float mInitialMotionY;
     private float mLastMotionX;
-    private float mLastMotionY;
     private boolean mIsUnableToDrag;
     private int mTouchMarginSize;
 
@@ -97,6 +100,14 @@ public class FragmentStackView extends ViewGroup {
         setWillNotDraw(true);
     }
 
+    public int getStackSize() {
+        return fragmentStack.size();
+    }
+
+    public void push(Fragment fragment, String tag) {
+        push(fragment, tag, true);
+    }
+
     /**
      * Fragment入栈
      * @param fragment 目标Fragment
@@ -104,8 +115,8 @@ public class FragmentStackView extends ViewGroup {
      * @param animate 是否动画过程
      */
     public void push(Fragment fragment, String tag, boolean animate) {
-        if(forcedAnimation) {
-            Log.w(TAG, "push forcedAnimation");
+        if(isInAnimation()) {
+            Log.w(TAG, "push isInAnimation");
             return;
         }
         fragmentStack.add(fragment);
@@ -115,7 +126,7 @@ public class FragmentStackView extends ViewGroup {
         fragmentManager.executePendingTransactions();
         if(animate) {
             forcedAnimation = true;
-            setTopActiveView();
+            setupTopActiveView();
             setActiveViewOffsetRatio(1);
             smoothScroll(false, 0);
         } else {
@@ -123,9 +134,13 @@ public class FragmentStackView extends ViewGroup {
         }
     }
 
+    public void pop() {
+        pop(true);
+    }
+
     public void pop(boolean animate) {
-        if(forcedAnimation) {
-            Log.w(TAG, "pop forcedAnimation");
+        if(isInAnimation()) {
+            Log.w(TAG, "push isInAnimation");
             return;
         }
         int size = fragmentStack.size();
@@ -134,12 +149,17 @@ public class FragmentStackView extends ViewGroup {
         }
         if(animate) {
             forcedAnimation = true;
-            setTopActiveView();
+            setupTopActiveView();
             setActiveViewOffsetRatio(0);
             smoothScroll(true, 0);
         } else {
             dispatchOnPop();
         }
+    }
+
+    public boolean isInAnimation() {
+        // TODO: 2015/6/30
+        return forcedAnimation || mDragState != STATE_IDLE;
     }
 
     /**
@@ -154,7 +174,7 @@ public class FragmentStackView extends ViewGroup {
      * 设置阴影
      */
     public void setShadow(@DrawableRes int resId) {
-        setShadow(getResources().getDrawable(resId));
+        setShadow(ResourcesCompat.getDrawable(getResources(), resId, null));
     }
 
     /**
@@ -167,10 +187,14 @@ public class FragmentStackView extends ViewGroup {
             if(behindFragment.isHidden()) {
                 behindActiveView.setVisibility(View.GONE);
             } else {
-                fragmentManager.beginTransaction()
-                        .hide(behindFragment)
-                        .commitAllowingStateLoss();
-                fragmentManager.executePendingTransactions();
+                try {
+                    fragmentManager.beginTransaction()
+                            .hide(behindFragment)
+                            .commitAllowingStateLoss();
+                    fragmentManager.executePendingTransactions();
+                } catch(Exception ig) {
+                    Log.e(TAG, "dispatchOnPush", ig);
+                }
             }
         }
         resetActiveView();
@@ -182,20 +206,24 @@ public class FragmentStackView extends ViewGroup {
      * 处理pop结束
      */
     private void dispatchOnPop() {
-        Log.i(TAG, "dispatchOnPop1 " + getChildCount());
+        //Log.i(TAG, "dispatchOnPop1 " + getChildCount());
         int size = fragmentStack.size();
         if(size > 0) {
             Fragment fragment = fragmentStack.get(size - 1);
-            FragmentTransaction ft = fragmentManager.beginTransaction();
-            ft.remove(fragment);
-            if(size > 1) {
-                ft.show(fragmentStack.get(size - 2));
+            try {
+                FragmentTransaction ft = fragmentManager.beginTransaction();
+                ft.remove(fragment);
+                if(size > 1) {
+                    ft.show(fragmentStack.get(size - 2));
+                }
+                ft.commitAllowingStateLoss();
+                fragmentManager.executePendingTransactions();
+            } catch(Exception ig) {
+                Log.e(TAG, "dispatchOnPop", ig);
             }
-            ft.commitAllowingStateLoss();
-            fragmentManager.executePendingTransactions();
             fragmentStack.remove(size - 1);
         }
-        Log.i(TAG, "dispatchOnPop2 " + getChildCount());
+        //Log.i(TAG, "dispatchOnPop2 " + getChildCount());
         resetActiveView();
         forcedAnimation = false;
         ensureTopViewOffset();
@@ -204,7 +232,7 @@ public class FragmentStackView extends ViewGroup {
     /**
      * 设置栈顶的两个View为activeView
      */
-    private void setTopActiveView() {
+    private void setupTopActiveView() {
         aboveActiveView = null;
         behindActiveView = null;
         int childCount = getChildCount();
@@ -216,6 +244,13 @@ public class FragmentStackView extends ViewGroup {
                     behindActiveView.setVisibility(View.VISIBLE);
                 }
             }
+        }
+    }
+
+    private void ensureActiveView() {
+        if(aboveActiveView == null) {
+            setupTopActiveView();
+            setActiveViewOffsetRatio(0);
         }
     }
 
@@ -285,9 +320,21 @@ public class FragmentStackView extends ViewGroup {
      */
     private void smoothScroll(boolean open, int velocity) {
         int startX = aboveActiveView.getLeft();
-        int endX = open ? getWidth() : 0;
-        // TODO: 2015/6/26 计算duration
-        int duration = 3000;
+        int width = getWidth();
+        int endX = open ? width : 0;
+        float distanceRatio = Math.abs((float) (endX - startX) / width);
+        int duration;
+        if(velocity != 0) {
+            final int halfWidth = width / 2;
+            float f = distanceRatio - 0.5f;
+            f *= 0.3f * Math.PI / 2.0f;
+            f = (float) Math.sin(f);
+            float distance = halfWidth + halfWidth * f;
+            duration = 6 * Math.round(1000 * Math.abs(distance / velocity));
+        } else {
+            duration = (int) ((distanceRatio + 1) * 150);
+        }
+        duration = Math.min(duration, MAX_SETTLE_DURATION);
         mViewScroller.startScroll(startX, endX - startX, duration);
     }
 
@@ -409,48 +456,151 @@ public class FragmentStackView extends ViewGroup {
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
 
+        if(!canDrag()) {
+            return false;
+        }
+
         final int action = MotionEventCompat.getActionMasked(ev);
+
+        if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_UP) {
+            endTouch();
+            return false;
+        }
 
         if(action != MotionEvent.ACTION_DOWN && mIsUnableToDrag) {
             return false;
         }
 
+        if(mVelocityTracker == null) {
+            mVelocityTracker = VelocityTracker.obtain();
+        }
+        mVelocityTracker.addMovement(ev);
+
         switch(action) {
-        case MotionEvent.ACTION_DOWN:
-            float initialMotionX = ev.getX();
-            if(isInMargin(initialMotionX)) {
+            case MotionEvent.ACTION_DOWN: {
+                float initialMotionX = ev.getX();
                 mLastMotionX = mInitialMotionX = initialMotionX;
-                mLastMotionY = mInitialMotionY = ev.getY();
+                mInitialMotionY = ev.getY();
                 mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
                 mIsUnableToDrag = false;
-            } else {
-                mIsUnableToDrag = true;
+                if(mDragState == STATE_SETTLING) {
+                    mViewScroller.stop();
+                    setDragState(STATE_DRAGGING);
+                    requestParentDisallowInterceptTouchEvent(true);
+                } else if(!isInMargin(initialMotionX)) {
+                    mIsUnableToDrag = true;
+                }
+                break;
             }
-            break;
-        case MotionEvent.ACTION_MOVE:
-            final int pointerIndex = MotionEventCompat.findPointerIndex(ev, mActivePointerId);
-            final float x = MotionEventCompat.getX(ev, pointerIndex);
-            final float dx = x - mInitialMotionX;
-
-
-            break;
-        case MotionEvent.ACTION_UP:
-            break;
-        case MotionEvent.ACTION_CANCEL:
-            break;
-        case MotionEventCompat.ACTION_POINTER_DOWN:
-            break;
-        case MotionEventCompat.ACTION_POINTER_UP:
-            break;
+            case MotionEvent.ACTION_MOVE: {
+                int activeIndex = MotionEventCompat.findPointerIndex(ev, mActivePointerId);
+                if(activeIndex < 0) {
+                    if(DEBUG) Log.w(TAG, "ACTION_MOVE pointerIndex < 0");
+                    break;
+                }
+                float x = MotionEventCompat.getX(ev, activeIndex);
+                float y = MotionEventCompat.getX(ev, activeIndex);
+                float dx = x - mInitialMotionX;
+                float absDx = Math.abs(dx);
+                float absDy = Math.abs(y - mInitialMotionY);
+                if(dx > mTouchSlop && absDx > absDy * 2) {
+                    mLastMotionX = dx > 0 ? mInitialMotionX + mTouchSlop : mInitialMotionX - mTouchSlop;
+                    setDragState(STATE_DRAGGING);
+                    requestParentDisallowInterceptTouchEvent(true);
+                } else if(absDy > mTouchSlop) {
+                    mIsUnableToDrag = true;
+                }
+                break;
+            }
+            case MotionEventCompat.ACTION_POINTER_DOWN: {
+                onSecondaryPointerDown(ev);
+                break;
+            }
+            case MotionEventCompat.ACTION_POINTER_UP: {
+                onSecondaryPointerUp(ev);
+                break;
+            }
         }
-
-        return super.onInterceptTouchEvent(ev);
+        return mDragState == STATE_DRAGGING;
     }
 
     @Override
-    public boolean onTouchEvent(MotionEvent event) {
-        return super.onTouchEvent(event);
-        // TODO: 2015/6/25
+    public boolean onTouchEvent(MotionEvent ev) {
+        if(mIsUnableToDrag || !canDrag()) {
+            return false;
+        }
+        if(mVelocityTracker == null) {
+            mVelocityTracker = VelocityTracker.obtain();
+        }
+        mVelocityTracker.addMovement(ev);
+        final int action = ev.getAction();
+        switch(action) {
+            case MotionEvent.ACTION_DOWN: {
+                mLastMotionX = mInitialMotionX = ev.getX();
+                mInitialMotionY = ev.getY();
+                mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
+                break;
+            }
+            case MotionEvent.ACTION_MOVE: {
+                int activeIndex = MotionEventCompat.findPointerIndex(ev, mActivePointerId);
+                if(activeIndex < 0) {
+                    if(DEBUG) Log.w(TAG, "ACTION_MOVE pointerIndex < 0");
+                    break;
+                }
+                float x = MotionEventCompat.getX(ev, activeIndex);
+                if(mDragState != STATE_DRAGGING) {
+                    float dx = x - mInitialMotionX;
+                    if(dx > mTouchSlop) {
+                        mLastMotionX = dx > 0 ? mInitialMotionX + mTouchSlop : mInitialMotionX - mTouchSlop;
+                        setDragState(STATE_DRAGGING);
+                        requestParentDisallowInterceptTouchEvent(true);
+                    }
+                }
+                if(mDragState == STATE_DRAGGING) {
+                    performDrag(x);
+                }
+                mLastMotionX = x;
+                break;
+            }
+            case MotionEvent.ACTION_UP: {
+                if(mDragState == STATE_DRAGGING) {
+                    VelocityTracker velocityTracker = mVelocityTracker;
+                    velocityTracker.computeCurrentVelocity(1000, mMaxVelocity);
+                    int initialVelocity = (int) VelocityTrackerCompat.getXVelocity(velocityTracker, mActivePointerId);
+                    if(Math.abs(initialVelocity) > mMinVelocity) {
+                        smoothScroll(initialVelocity > 0, initialVelocity);
+                    } else {
+                        boolean open = ((LayoutParams) aboveActiveView.getLayoutParams()).offsetRatio > 0.5f;
+                        smoothScroll(open, 0);
+                    }
+                }
+                endTouch();
+                break;
+            }
+            case MotionEvent.ACTION_CANCEL: {
+                if(mDragState == STATE_DRAGGING) {
+                    smoothScroll(false, 0);
+                }
+                endTouch();
+                break;
+            }
+            case MotionEventCompat.ACTION_POINTER_DOWN: {
+                onSecondaryPointerDown(ev);
+                break;
+            }
+            case MotionEventCompat.ACTION_POINTER_UP: {
+                onSecondaryPointerUp(ev);
+                break;
+            }
+        }
+        return true;
+    }
+
+    //切换mActivePointerId
+    private void onSecondaryPointerDown(MotionEvent ev) {
+        int actionIndex = ev.getActionIndex();
+        mLastMotionX = mInitialMotionX = MotionEventCompat.getX(ev, actionIndex);
+        mActivePointerId = MotionEventCompat.getPointerId(ev, actionIndex);
     }
 
     //切换mActivePointerId
@@ -460,15 +610,55 @@ public class FragmentStackView extends ViewGroup {
             final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
             mLastMotionX = MotionEventCompat.getX(ev, newPointerIndex);
             mActivePointerId = MotionEventCompat.getPointerId(ev, newPointerIndex);
-            if (mVelocityTracker != null) {
-                mVelocityTracker.clear();
-            }
+        }
+    }
+
+    private void endTouch() {
+        mActivePointerId = INVALID_POINTER;
+        mIsUnableToDrag = false;
+        if(mVelocityTracker != null) {
+            mVelocityTracker.clear();
         }
     }
 
     //x坐标是否处于边界
     private boolean isInMargin(float motionX) {
         return motionX < mTouchMarginSize;
+    }
+
+    private void requestParentDisallowInterceptTouchEvent(boolean disallowIntercept) {
+        final ViewParent parent = getParent();
+        if (parent != null) {
+            parent.requestDisallowInterceptTouchEvent(disallowIntercept);
+        }
+    }
+
+    private boolean canDrag() {
+        return getChildCount() > 1;
+    }
+
+    /**
+     * 执行drag
+     */
+    private void performDrag(float x) {
+        float dx = x - mLastMotionX;
+        if(dx == 0) {
+            return;
+        }
+        ensureActiveView();
+
+        float left = aboveActiveView.getLeft();
+        float width = getWidth();
+        float newX = left + dx;
+        if(newX < 0) {
+            dx = -left;
+        } else if(newX > width) {
+            dx = width - left;
+        }
+        if(dx == 0) {
+            return;
+        }
+        offsetActiveView((int) dx);
     }
 
     @Override
