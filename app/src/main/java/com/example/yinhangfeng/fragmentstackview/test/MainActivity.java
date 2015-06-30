@@ -64,6 +64,11 @@ public class MainActivity extends AppCompatActivity {
         return super.onOptionsItemSelected(item);
     }
 
+    @Override
+    public void onBackPressed() {
+        fragmentStackView.pop();
+    }
+
     private void test1() {
         fragmentStackView.push(new Fragment1(), "aaa", true);
     }

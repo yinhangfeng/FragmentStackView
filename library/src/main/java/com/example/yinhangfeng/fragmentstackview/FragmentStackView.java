@@ -164,11 +164,19 @@ public class FragmentStackView extends ViewGroup {
             Log.w(TAG, "push isInAnimation");
             return;
         }
-        if(index < 0 || index >= fragmentStack.size()) {
+        int size = fragmentStack.size();
+        if(size == 0) {
+            return;
+        }
+        if(index < 0 || index >= size) {
             Log.e(TAG, "popByIndex invalid index");
             return;
         }
-        behindViewIndex = include ? index - 1 : index;
+        int newBehindViewIndex = include ? index - 1 : index;
+        if(newBehindViewIndex >= size - 1) {
+            return;
+        }
+        behindViewIndex = newBehindViewIndex;
         if(animate) {
             forcedAnimation = true;
             setupTopActiveView();
@@ -197,6 +205,7 @@ public class FragmentStackView extends ViewGroup {
     }
 
     public boolean isInAnimation() {
+        Log.i(TAG, "isInAnimation forcedAnimation=" + forcedAnimation + " mDragState=" + mDragState);
         // TODO: 2015/6/30
         return forcedAnimation || mDragState != STATE_IDLE;
     }
@@ -251,7 +260,7 @@ public class FragmentStackView extends ViewGroup {
             int endIndex = behindViewIndex;
             if(endIndex < 0) {
                 if(size > 1) {
-                    endIndex = size - 1;
+                    endIndex = size - 2;
                 } else {
                     endIndex = -1;
                 }
@@ -403,11 +412,13 @@ public class FragmentStackView extends ViewGroup {
         mDragState = state;
         if(state == STATE_IDLE && aboveActiveView != null) {
             LayoutParams lp = (LayoutParams) aboveActiveView.getLayoutParams();
-            if(lp.offsetRatio == 1) {
+            if(lp.offsetRatio > 0.5f) {
                 dispatchOnPop();
-            } else if(lp.offsetRatio == 0) {
+            } else {
                 dispatchOnPush();
             }
+        } else if(state == STATE_DRAGGING) {
+            ensureActiveView();
         }
     }
 
@@ -557,7 +568,7 @@ public class FragmentStackView extends ViewGroup {
                     break;
                 }
                 float x = MotionEventCompat.getX(ev, activeIndex);
-                float y = MotionEventCompat.getX(ev, activeIndex);
+                float y = MotionEventCompat.getY(ev, activeIndex);
                 float dx = x - mInitialMotionX;
                 float absDx = Math.abs(dx);
                 float absDy = Math.abs(y - mInitialMotionY);
@@ -703,7 +714,6 @@ public class FragmentStackView extends ViewGroup {
         if(dx == 0) {
             return;
         }
-        ensureActiveView();
 
         float left = aboveActiveView.getLeft();
         float width = getWidth();
