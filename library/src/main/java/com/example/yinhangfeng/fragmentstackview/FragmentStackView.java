@@ -547,6 +547,10 @@ public class FragmentStackView extends ViewGroup {
         switch(action) {
             case MotionEvent.ACTION_DOWN: {
                 float initialMotionX = ev.getX();
+                if(!isInMargin(initialMotionX)) {
+                    mIsUnableToDrag = true;
+                    break;
+                }
                 mLastMotionX = mInitialMotionX = initialMotionX;
                 mInitialMotionY = ev.getY();
                 mActivePointerId = MotionEventCompat.getPointerId(ev, 0);
@@ -555,8 +559,6 @@ public class FragmentStackView extends ViewGroup {
                     mViewScroller.stop();
                     setDragState(STATE_DRAGGING);
                     requestParentDisallowInterceptTouchEvent(true);
-                } else if(!isInMargin(initialMotionX)) {
-                    mIsUnableToDrag = true;
                 }
                 break;
             }
@@ -601,7 +603,7 @@ public class FragmentStackView extends ViewGroup {
             mVelocityTracker = VelocityTracker.obtain();
         }
         mVelocityTracker.addMovement(ev);
-        final int action = ev.getAction();
+        final int action = MotionEventCompat.getActionMasked(ev);
         switch(action) {
             case MotionEvent.ACTION_DOWN: {
                 mLastMotionX = mInitialMotionX = ev.getX();
@@ -666,8 +668,9 @@ public class FragmentStackView extends ViewGroup {
 
     //切换mActivePointerId
     private void onSecondaryPointerDown(MotionEvent ev) {
-        int actionIndex = ev.getActionIndex();
+        int actionIndex = MotionEventCompat.getActionIndex(ev);
         mLastMotionX = mInitialMotionX = MotionEventCompat.getX(ev, actionIndex);
+        mInitialMotionY = MotionEventCompat.getY(ev, actionIndex);
         mActivePointerId = MotionEventCompat.getPointerId(ev, actionIndex);
     }
 
@@ -676,7 +679,8 @@ public class FragmentStackView extends ViewGroup {
         final int pointerIndex = MotionEventCompat.getActionIndex(ev);
         if (MotionEventCompat.getPointerId(ev, pointerIndex) == mActivePointerId) {
             final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
-            mLastMotionX = MotionEventCompat.getX(ev, newPointerIndex);
+            mLastMotionX = mInitialMotionX = MotionEventCompat.getX(ev, newPointerIndex);
+            mInitialMotionY = MotionEventCompat.getY(ev, newPointerIndex);
             mActivePointerId = MotionEventCompat.getPointerId(ev, newPointerIndex);
         }
     }
