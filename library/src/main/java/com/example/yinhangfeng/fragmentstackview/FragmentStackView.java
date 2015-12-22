@@ -97,7 +97,7 @@ public class FragmentStackView extends ViewGroup {
         mMaxVelocity = vc.getScaledMaximumFlingVelocity();
         mMinVelocity = vc.getScaledMinimumFlingVelocity();
         final float density = getResources().getDisplayMetrics().density;
-        mTouchMarginSize = (int) (16 * density);//16dp
+        mTouchMarginSize = (int) (20 * density);//20dp
 
         setWillNotDraw(true);
     }
@@ -424,6 +424,7 @@ public class FragmentStackView extends ViewGroup {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        if(DEBUG) Log.i(TAG, "onMeasure() called with " + "widthMeasureSpec = [" + widthMeasureSpec + "], heightMeasureSpec = [" + heightMeasureSpec + "]");
         int widthMode = MeasureSpec.getMode(widthMeasureSpec);
         int heightMode = MeasureSpec.getMode(heightMeasureSpec);
         int widthSize = MeasureSpec.getSize(widthMeasureSpec);
@@ -472,6 +473,7 @@ public class FragmentStackView extends ViewGroup {
 
     @Override
     protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        if(DEBUG) Log.i(TAG, "onLayout() called with " + "changed = [" + changed + "], l = [" + l + "], t = [" + t + "], r = [" + r + "], b = [" + b + "]");
         final int width = r - l;
         final int childCount = getChildCount();
         for(int i = 0; i < childCount; i++) {
@@ -482,7 +484,7 @@ public class FragmentStackView extends ViewGroup {
             }
 
             final LayoutParams lp = (LayoutParams) child.getLayoutParams();
-            int childLeft = (int) (lp.offsetRatio * width);
+            int childLeft = Math.round(lp.offsetRatio * width);
             child.layout(childLeft, lp.topMargin, childLeft + child.getMeasuredWidth(), lp.topMargin + child.getMeasuredHeight());
         }
     }
